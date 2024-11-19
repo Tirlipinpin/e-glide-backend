@@ -2,8 +2,15 @@ package main
 
 import (
 	"net/http"
+	"os"
+
+	gintrace "gopkg.in/DataDog/dd-trace-go.v1/contrib/gin-gonic/gin"
+	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 type article struct {
@@ -228,7 +235,34 @@ var articles = []article{
 }
 
 func main() {
+	gin.SetMode(gin.ReleaseMode)
+
+	tracer.Start()
+	defer tracer.Stop()
+
 	router := gin.Default()
+
+	// Send app traces to Datadog
+	router.Use(gintrace.Middleware("e-glide-backend"))
+
+	// Setup logger
+
+	// UNIX Time is faster and smaller than most timestamps
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+
+	// Send logs to file
+	file, err := os.OpenFile("app.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		logger := zerolog.New(os.Stderr).With().Str("env", gin.Mode()).Timestamp().Logger()
+		logger.Fatal().Err(err).Msg("Failed to open log file")
+		return
+	}
+	defer file.Close()
+
+	log.Logger = zerolog.New(file).With().Str("env", gin.Mode()).Timestamp().Logger()
+
+	// End setup logger
+
 	router.GET("/articles", getArticles)
 	router.GET("/articles/:id", getArticleById)
 
@@ -236,6 +270,7 @@ func main() {
 }
 
 func getArticles(c *gin.Context) {
+	log.Debug().Msg("Getting list of articles")
 	c.IndentedJSON(http.StatusOK, articles)
 }
 
@@ -245,9 +280,11 @@ func getArticleById(c *gin.Context) {
 	for _, article := range articles {
 		if article.ID == id {
 			c.IndentedJSON(http.StatusOK, article)
+			log.Info().Str("article-id", id).Msg("Retrieved article")
 			return
 		}
 	}
 
+	log.Error().Str("article-id", id).Msg("Article not found")
 	c.IndentedJSON(http.StatusNotFound, gin.H{"message": "Could not find an article with this id"})
 }
